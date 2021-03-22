@@ -17,9 +17,9 @@
 
 #include "engine.h"
 
-#define VIDEO_RIFE_REQCODE 0x0205
+#define VIDEO_RIFE_REQCODE 0x0201
 // #define VIDEO_RIFE_URL "ipc:///tmp/video_rife.ipc"
-#define VIDEO_RIFE_URL "tcp://127.0.0.1:9205"
+#define VIDEO_RIFE_URL "tcp://127.0.0.1:9201"
 
 int server(char *endpoint, int use_gpu)
 {
@@ -60,16 +60,41 @@ failure:
 	return tensor;
 }
 
+TENSOR *rife_onnxrpc(int socket, TENSOR *send_tensor)
+{
+	int nh, nw, rescode;
+	TENSOR *resize_send, *resize_recv, *recv_tensor;
+
+	CHECK_TENSOR(send_tensor);
+
+	// rife server limited: only accept 8 times tensor !!!
+	nh = (send_tensor->height + 7)/8; nh *= 8;
+	nw = (send_tensor->width + 7)/8; nw *= 8;
+
+	if (send_tensor->height == nh && send_tensor->width == nw) {
+		// Normal onnx RPC
+		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_RIFE_REQCODE, &rescode);
+	} else {
+		resize_send = tensor_zoom(send_tensor, nh, nw); CHECK_TENSOR(resize_send);
+		resize_recv = OnnxRPC(socket, resize_send, VIDEO_RIFE_REQCODE, &rescode);
+		recv_tensor = tensor_zoom(resize_recv, send_tensor->height, send_tensor->width);
+		tensor_destroy(resize_recv);
+		tensor_destroy(resize_send);
+	}
+
+	return recv_tensor;
+}
+
+
 int rife(int socket, char *input_file1, char *input_file2)
 {
-	int rescode;
 	TENSOR *send_tensor, *recv_tensor;
 
 	printf("Interpolating %s %s ...\n", input_file1, input_file2);
 
 	send_tensor = blend_tensor(input_file1, input_file2);
 	if (tensor_valid(send_tensor)) {
-		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_RIFE_REQCODE, &rescode);
+		recv_tensor = rife_onnxrpc(socket, send_tensor);
 		if (tensor_valid(recv_tensor)) {
 			SaveTensorAsImage(recv_tensor, input_file1);
 			tensor_destroy(recv_tensor);
