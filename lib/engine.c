@@ -48,7 +48,7 @@ TorchEngine *CreateEngine(const char *model_path, int use_gpu)
 	}
 
 	CheckPoint("Module size = %d", sizeof(t->module));
-	
+
 	// to GPU
 	if (use_gpu)
 		t->module.to(at::kCUDA);
@@ -82,18 +82,6 @@ TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 		output_tensor = output_tensor.to(torch::kCPU);
 	// std::cout << "Output dimensions: " << output_tensor.sizes() << std::endl;
 
-#if 1
-	auto results = output_tensor.sort(-1, true);
-	auto softmaxs = std::get < 0 > (results)[0].softmax(0);
-	auto indexs = std::get < 1 > (results)[0];
-
-	std::cout << "Class Result:" << std::endl;
-	for (int i = 0; i < 3; ++i) {
-		auto idx = indexs[i].item < int >();
-		std::cout << idx << ": " << softmaxs[i].item < float >() * 100.0f << "%" << std::endl;
-	}
-#endif
-
 	// torch::Tensor tensor = torch::randn({3, 4, 5});
 	// assert(tensor.sizes() == std::vector<int64_t>{3, 4, 5});
 	auto output_tensor_dims = output_tensor.sizes();
@@ -101,7 +89,7 @@ TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 	for (i = 0; i < n; i++)
 		dims[i] = 1;
 	for (i = n; i < 4; i++)
-		dims[i] = output_tensor_dims[4 - i - 1];
+		dims[i] = output_tensor_dims[i - n];
 
 	output = tensor_create(dims[0], dims[1], dims[2], dims[3]);
 	CHECK_TENSOR(output);

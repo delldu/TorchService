@@ -23,47 +23,59 @@
 
 int server(char *endpoint, int use_gpu)
 {
-	return TorchService(endpoint, (char *)"video_rife.pt", use_gpu);
+	return TorchService(endpoint, (char *)"VideoRIFE.pt", use_gpu);
 }
 
-int rife(int socket, char *input_file)
+TENSOR *blend_tensor(char *input_file1, char *input_file2)
+{
+	int n;
+	IMAGE *image1, *image2;
+	TENSOR *tensor1, *tensor2, *tensor;
+
+	image1 = image_load(input_file1); CHECK_IMAGE(image1);
+	image2 = image_load(input_file2); CHECK_IMAGE(image2);
+
+	tensor1 = tensor_from_image(image1, 0); CHECK_TENSOR(tensor1);
+	tensor2 = tensor_from_image(image2, 0); CHECK_TENSOR(tensor2);
+
+	tensor = NULL;
+
+	if (tensor1->height != tensor2->height || tensor1->width != tensor2->width) {
+		syslog_error("Image is not same size between %s %s", input_file1, input_file2);
+		goto failure;
+	}
+
+	n = 3 * tensor1->height * tensor1->width;
+	tensor = tensor_create(2, 3, tensor1->height, tensor2->width);
+	memcpy(tensor->data, tensor1->data, n * sizeof(float));
+	memcpy(&tensor->data[n], tensor2->data, n * sizeof(float));
+
+failure:
+
+	tensor_destroy(tensor2);
+	tensor_destroy(tensor1);
+	image_destroy(image2);
+	image_destroy(image1);
+
+	return tensor;
+}
+
+int rife(int socket, char *input_file1, char *input_file2)
 {
 	int rescode;
-	IMAGE *orig_image, *send_image;
 	TENSOR *send_tensor, *recv_tensor;
 
-	printf("Interpolating %s ...\n", input_file);
+	printf("Interpolating %s %s ...\n", input_file1, input_file2);
 
-	orig_image = image_load(input_file); check_image(orig_image);
-	send_image = image_zoom(orig_image, 224, 224, 0); check_image(send_image);
-	image_destroy(orig_image);
-
-	if (image_valid(send_image)) {
-		send_tensor = tensor_from_image(send_image, 0);
-		check_tensor(send_tensor);
-
-#if 1
-		int i;
-		float *data;
-		data = tensor_start_chan(send_tensor, 0, 0 /*R*/);
-		for (i = 0; i < send_tensor->height * send_tensor->width; i++)
-			data[i] = (data[i] - 0.485)/0.229;
-		data = tensor_start_chan(send_tensor, 0, 1 /*G*/);
-		for (i = 0; i < send_tensor->height * send_tensor->width; i++)
-			data[i] = (data[i] - 0.456)/0.224;
-		data = tensor_start_chan(send_tensor, 0, 2 /*B*/);
-		for (i = 0; i < send_tensor->height * send_tensor->width; i++)
-			data[i] = (data[i] - 0.406)/0.225;
-#endif
+	send_tensor = blend_tensor(input_file1, input_file2);
+	if (tensor_valid(send_tensor)) {
 		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_RIFE_REQCODE, &rescode);
 		if (tensor_valid(recv_tensor)) {
-			syslog_info("OK.");
-			// SaveTensorAsImage(recv_tensor, input_file);
+			SaveTensorAsImage(recv_tensor, input_file1);
 			tensor_destroy(recv_tensor);
 		}
 
 		tensor_destroy(send_tensor);
-		image_destroy(send_image);
 	}
 
 	return RET_OK;
@@ -71,7 +83,7 @@ int rife(int socket, char *input_file)
 
 void help(char *cmd)
 {
-	printf("Usage: %s [option] <image files>\n", cmd);
+	printf("Usage: %s [option] <image files -- input1 input2 ... >\n", cmd);
 	printf("    h, --help                   Display this help.\n");
 	printf("    e, --endpoint               Set endpoint.\n");
 	printf("    s, --server <0 | 1>         Start server (use gpu).\n");
@@ -117,12 +129,12 @@ int main(int argc, char **argv)
 
 	if (running_server)
 		return server(endpoint, use_gpu);
-	else if (argc > 1) {
+	else if (argc > optind + 1) {
 		if ((socket = client_open(endpoint)) < 0)
 			return RET_ERROR;
 
-		for (i = 1; i < argc; i++)
-			rife(socket, argv[i]);
+		for (i = optind; i + 1 < argc; i++)
+			rife(socket, argv[i], argv[i + 1]);
 
 		client_close(socket);
 		return RET_OK;
