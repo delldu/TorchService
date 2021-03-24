@@ -7,20 +7,19 @@
 #************************************************************************************/
 #
 INSTALL_DIR := /usr/local
-TORCH_INSTALL_DIR := /opt/libtorch
 
 TARGET := video_rife
 
 SOURCE :=  \
 	main.c \
 
-INCS	:= -I../lib -isystem$(TORCH_INSTALL_DIR)/include $(shell nimagetool --cflags)
+INCS	:= -I../lib $(shell torchtool --cflags) $(shell nimagetool --cflags)
 
 LIBS	:= -L../lib -ltorcheng \
-	-Wl,--no-as-needed -L${TORCH_INSTALL_DIR}/lib -lc10 -lc10_cuda -ltorch -ltorch_cuda -ltorch_cpu \
+	$(shell torchtool --libs) \
 	$(shell nimagetool --libs)
 
-DEFINES := -D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14 -std=gnu++14
+DEFINES :=
 
 CXXFLAGS := -O3 -fPIC -Wall -Wextra
 LDFLAGS := -fPIC

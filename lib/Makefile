@@ -6,16 +6,15 @@
 #***
 #************************************************************************************/
 #
-TORCH_INSTALL_DIR :=/opt/libtorch
 
 LIB_NAME := libtorcheng
 
-INCS	:= -isystem$(TORCH_INSTALL_DIR)/include $(shell nimagetool --cflags)
+INCS	:= $(shell torchtool --cflags) $(shell nimagetool --cflags)
 
 SOURCE :=  \
 	engine.c
 
-DEFINES := -D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14 -std=gnu++14 
+DEFINES :=
 
 CXXFLAGS := -fPIC -Wall -Wextra
 LDFLAGS := -fPIC -O3
