@@ -10,7 +10,7 @@ TORCH_INSTALL_DIR :=/opt/libtorch
 
 LIB_NAME := libtorcheng
 
-INCS	:= -isystem $(TORCH_INSTALL_DIR)/include $(shell nimagetool --cflags)
+INCS	:= -isystem$(TORCH_INSTALL_DIR)/include $(shell nimagetool --cflags)
 
 SOURCE :=  \
 	engine.c
