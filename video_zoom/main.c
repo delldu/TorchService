@@ -30,7 +30,7 @@ torch::Tensor dcnv2_forward(
     const int64_t dilation_h, const int64_t dilation_w,
     const int64_t deformable_group);
 
-int test_dcn_v2_forward()
+void test_dcn_v2_forward()
 {
 	// input = torch.rand(32, 3, 10, 10)
 	// kh, kw = 3, 3
