@@ -15,14 +15,16 @@ SOURCE :=  \
 
 INCS	:= -I../lib $(shell torchtool --cflags) $(shell nimagetool --cflags)
 
-LIBS	:= -L../lib -ltorcheng \
+LIBS	:= -L../lib -ltorcheng -L../dcnv2 -ldcnv2 \
+	-L /usr/local/cuda-10.2/lib64 -lcudart \
+	$(shell nimagetool --libs) \
 	$(shell torchtool --libs) \
-	$(shell nimagetool --libs)
 
 DEFINES :=
 
 CXXFLAGS := -O3 -fPIC -Wall -Wextra
-LDFLAGS := -fPIC
+LDFLAGS :=
+# -fPIC
 
 #****************************************************************************
 # Makefile code common to all platforms

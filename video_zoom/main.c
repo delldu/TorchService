@@ -21,9 +21,37 @@
 // #define VIDEO_ZOOM_URL "ipc:///tmp/video_zoom.ipc"
 #define VIDEO_ZOOM_URL "tcp://127.0.0.1:9202"
 
+// DCNv2 interface
+torch::Tensor dcnv2_forward(
+	const torch::Tensor &input, const torch::Tensor &weight, const torch::Tensor &bias,
+	const torch::Tensor &offset, const torch::Tensor &mask, 
+	const int64_t stride_h, const int64_t stride_w,
+	const int64_t pad_h, const int64_t pad_w,
+    const int64_t dilation_h, const int64_t dilation_w,
+    const int64_t deformable_group);
+
+int test_dcn_v2_forward()
+{
+	// input = torch.rand(32, 3, 10, 10)
+	// kh, kw = 3, 3
+	// weight = torch.rand(5, 3, kh, kw)
+	// # bias = torch.zeros(out_channels, device=input.device, dtype=input.dtype)
+	// bias = torch.zeros(weight.shape[0], device=input.device, dtype=input.dtype)
+
+	// offset = torch.rand(32, 2 * kh * kw, 8, 8)
+	// mask = torch.rand(32, kh * kw, 8, 8)
+
+	(void)dcnv2_forward(torch::randn({32, 3, 10, 10}), 
+		torch::randn({5, 3, 3, 3}), torch::randn({5,}),
+		torch::randn({32, 18, 8, 8}), torch::randn({32, 9, 8, 8}), 
+		1, 1, 0, 0, 1, 1, 8);
+}
+
 int server(char *endpoint, int use_gpu)
 {
-	return TorchService(endpoint, (char *)"VideoZOOM.pt", use_gpu);
+	test_dcn_v2_forward();	// Just loading dcnv2_forward from shared lib
+
+	return TorchService(endpoint, (char *)"VideoZoom.pt", use_gpu);
 }
 
 TENSOR *blend_tensor(char *input_file1, char *input_file2)

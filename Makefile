@@ -9,7 +9,9 @@
 
 XSUBDIRS :=  \
 	lib \
-	video_rife
+	dcnv2 \
+	video_rife \
+	video_zoom
 
 
 BSUBDIRS :=

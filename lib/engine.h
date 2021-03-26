@@ -19,6 +19,15 @@
 #include <torch/script.h>
 typedef torch::jit::script::Module TorchModule;
 
+// DCNv2 interface
+torch::Tensor dcn_v2_forward(const torch::Tensor &input, const torch::Tensor &weight,
+                          const torch::Tensor &bias, const torch::Tensor &offset,
+                          const torch::Tensor &mask, const int64_t kernel_h,
+                          const int64_t kernel_w, const int64_t stride_h,
+                          const int64_t stride_w, const int64_t pad_h, const int64_t pad_w,
+                          const int64_t dilation_h, const int64_t dilation_w,
+                          const int64_t deformable_group);
+
 // Torch Runtime Engine
 typedef struct {
 	DWORD magic;

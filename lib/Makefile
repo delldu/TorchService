@@ -47,5 +47,6 @@ depend:
 
 
 clean:
-	rm -rf *.a *.so *.o $(OBJECTS)
+	# DO NOT DELETE libdcnv2.so
+	rm -rf *.a libtorcheng.so *.o $(OBJECTS)
 
