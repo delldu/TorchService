@@ -40,9 +40,9 @@ ${TARGET}: ${OBJECT}
 	${CXX} ${LDFLAGS} -o ${TARGET} ${OBJECT} ${LIBS}
 
 install:
-	sudo install -m 755 ${TARGET} ${INSTALL_DIR}/bin
-	sudo cp video_rife.service /lib/systemd/system/
-	sudo systemctl daemon-reload
+	install -m 755 ${TARGET} ${INSTALL_DIR}/bin
+	cp video_rife.service /lib/systemd/system/
+	systemctl daemon-reload
 
 
 #****************************************************************************

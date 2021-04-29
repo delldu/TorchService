@@ -17,9 +17,6 @@
 
 #include "engine.h"
 
-#define VIDEO_ZOOM_REQCODE 0x0202
-// #define VIDEO_ZOOM_URL "ipc:///tmp/video_zoom.ipc"
-#define VIDEO_ZOOM_URL "tcp://127.0.0.1:9202"
 
 // DCNv2 interface
 torch::Tensor dcnv2_forward(
@@ -47,11 +44,13 @@ void test_dcn_v2_forward()
 		1, 1, 0, 0, 1, 1, 8);
 }
 
-int server(char *endpoint, int use_gpu)
+int zoom_server(char *endpoint, int use_gpu)
 {
 	test_dcn_v2_forward();	// Just loading dcnv2_forward from shared lib
-
-	return TorchService(endpoint, (char *)"VideoZoom.pt", use_gpu);
+	if (use_gpu)
+		return TorchService(endpoint, (char *)"VideoZoomGPU.pt", VIDEO_ZOOM_SERVICE, use_gpu, NULL);
+	// CPU Model
+	return TorchService(endpoint, (char *)"VideoZoomCPU.pt", VIDEO_ZOOM_SERVICE, use_gpu, NULL);
 }
 
 TENSOR *blend_tensor(char *input_file1, char *input_file2)
@@ -95,16 +94,16 @@ TENSOR *zoom_onnxrpc(int socket, TENSOR *send_tensor)
 
 	CHECK_TENSOR(send_tensor);
 
-	// zoom server limited: only accept 8 times tensor !!!
+	// zoom zoom_server limited: only accept 8 times tensor !!!
 	nh = (send_tensor->height + 7)/8; nh *= 8;
 	nw = (send_tensor->width + 7)/8; nw *= 8;
 
 	if (send_tensor->height == nh && send_tensor->width == nw) {
 		// Normal onnx RPC
-		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_ZOOM_REQCODE, &rescode);
+		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_ZOOM_SERVICE, &rescode);
 	} else {
 		resize_send = tensor_zoom(send_tensor, nh, nw); CHECK_TENSOR(resize_send);
-		resize_recv = OnnxRPC(socket, resize_send, VIDEO_ZOOM_REQCODE, &rescode);
+		resize_recv = OnnxRPC(socket, resize_send, VIDEO_ZOOM_SERVICE, &rescode);
 		recv_tensor = tensor_zoom(resize_recv, send_tensor->height, send_tensor->width);
 		tensor_destroy(resize_recv);
 		tensor_destroy(resize_send);
@@ -113,18 +112,41 @@ TENSOR *zoom_onnxrpc(int socket, TENSOR *send_tensor)
 	return recv_tensor;
 }
 
+void SaveTensorAsTwoImages(TENSOR *tensor, char *filename1, char *filename2)
+{
+	CheckPoint("file1 = %s, file2 = %s", filename1, filename2);
+	tensor_show(tensor);
+
+	// File1
+	IMAGE *image = image_from_tensor(tensor, 0);
+	if (image_valid(image)) {
+		SaveOutputImage(image, filename1);
+		image_destroy(image);
+	}
+
+	// File2
+	image = image_from_tensor(tensor, 1);
+	if (image_valid(image)) {
+		SaveOutputImage(image, filename2);
+		image_destroy(image);
+	}
+}
+
 
 int zoom(int socket, char *input_file1, char *input_file2)
 {
 	TENSOR *send_tensor, *recv_tensor;
 
-	printf("Interpolating %s %s ...\n", input_file1, input_file2);
+	printf("Zooming %s %s ...\n", input_file1, input_file2);
 
 	send_tensor = blend_tensor(input_file1, input_file2);
+	CheckPoint("-----------");
+	tensor_show(send_tensor);
+
 	if (tensor_valid(send_tensor)) {
 		recv_tensor = zoom_onnxrpc(socket, send_tensor);
 		if (tensor_valid(recv_tensor)) {
-			SaveTensorAsImage(recv_tensor, input_file1);
+			SaveTensorAsTwoImages(recv_tensor, input_file1, input_file2);
 			tensor_destroy(recv_tensor);
 		}
 
@@ -139,7 +161,7 @@ void help(char *cmd)
 	printf("Usage: %s [option] <image files -- input1 input2 ... >\n", cmd);
 	printf("    h, --help                   Display this help.\n");
 	printf("    e, --endpoint               Set endpoint.\n");
-	printf("    s, --server <0 | 1>         Start server (use gpu).\n");
+	printf("    s, --zoom_server <0 | 1>         Start zoom_server (use gpu).\n");
 
 	exit(1);
 }
@@ -157,7 +179,7 @@ int main(int argc, char **argv)
 	struct option long_opts[] = {
 		{"help", 0, 0, 'h'},
 		{"endpoint", 1, 0, 'e'},
-		{"server", 1, 0, 's'},
+		{"zoom_server", 1, 0, 's'},
 		{0, 0, 0, 0}
 	};
 
@@ -181,15 +203,23 @@ int main(int argc, char **argv)
 	}
 
 	if (running_server)
-		return server(endpoint, use_gpu);
+		return zoom_server(endpoint, use_gpu);
 	else if (argc > optind + 1) {
+		CheckPoint();
+
 		if ((socket = client_open(endpoint)) < 0)
 			return RET_ERROR;
+
+		CheckPoint();
 
 		for (i = optind; i + 1 < argc; i++)
 			zoom(socket, argv[i], argv[i + 1]);
 
+		CheckPoint();
+
 		client_close(socket);
+		CheckPoint();
+
 		return RET_OK;
 	}
 

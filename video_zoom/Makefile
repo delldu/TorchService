@@ -16,7 +16,7 @@ SOURCE :=  \
 INCS	:= -I../lib $(shell torchtool --cflags) $(shell nimagetool --cflags)
 
 LIBS	:= -L../lib -ltorcheng -L../dcnv2 -ldcnv2 \
-	-L /usr/local/cuda-10.2/lib64 -lcudart \
+	-L /usr/local/cuda-10.2/lib64 -lcudart_static -lrt -ldl \
 	$(shell nimagetool --libs) \
 	$(shell torchtool --libs) \
 
@@ -42,9 +42,9 @@ ${TARGET}: ${OBJECT}
 	${CXX} ${LDFLAGS} -o ${TARGET} ${OBJECT} ${LIBS}
 
 install:
-	sudo install -m 755 ${TARGET} ${INSTALL_DIR}/bin
-	sudo cp video_zoom.service /lib/systemd/system/
-	sudo systemctl daemon-reload
+	install -m 755 ${TARGET} ${INSTALL_DIR}/bin
+	cp video_zoom.service /lib/systemd/system/
+	systemctl daemon-reload
 
 
 #****************************************************************************

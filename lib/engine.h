@@ -15,6 +15,8 @@
 #include <nimage/image.h>
 #include <nimage/nnmsg.h>
 
+#include <vision_service.h>
+
 // One-stop header.
 #include <torch/script.h>
 typedef torch::jit::script::Module TorchModule;
@@ -23,7 +25,7 @@ typedef torch::jit::script::Module TorchModule;
 // Torch Runtime Engine
 typedef struct {
 	DWORD magic;
-	const char *model_path;
+	char *model_path;
 	TorchModule module;
 	int use_gpu;
 } TorchEngine;
@@ -36,16 +38,41 @@ typedef struct {
             } \
     } while(0)
 
-TorchEngine *CreateEngine(const char *model_path, int use_gpu);
+// typedef int (*CustomSevice)(int socket, int service_code, TENSOR *input_tensor);
+typedef int (*CustomSevice)(int, int, TENSOR *);
+
+
+TorchEngine *CreateEngine(char *model_path, int use_gpu);
 int ValidEngine(TorchEngine * engine);
 TENSOR *TensorForward(TorchEngine * engine, TENSOR * input);
 void DestroyEngine(TorchEngine * engine);
 
-int TorchService(char *endpoint, char *onnx_file, int use_gpu);
-TENSOR *OnnxRPC(int socket, TENSOR * input, int reqcode, int *rescode);
+int TorchService(char *endpoint, char *torch_file, int service_code, int use_gpu, CustomSevice custom_service_function);
+TENSOR *OnnxRPC(int socket, TENSOR * input, int seqcode, int *rescode);
 
 void SaveOutputImage(IMAGE *image, char *filename);
 void SaveTensorAsImage(TENSOR *tensor, char *filename);
+
+
+#define ENGINE_IDLE_TIME (120*1000)	// 120 seconds
+
+#define StartEngine(engine, onnx_file, use_gpu) \
+do { \
+	if (engine == NULL) \
+		engine = CreateEngine(torch_file, use_gpu); \
+	CheckEngine(engine); \
+	engine_last_running_time = time_now(); \
+} while(0)
+
+#define StopEngine(engine) \
+do { \
+	engine_last_running_time = time_now(); \
+	DestroyEngine(engine); \
+	engine = NULL; \
+} while(0)
+
+#define InitEngineRunningTime() do { engine_last_running_time = 0; } while(0)
+#define EngineIsIdle() (time_now() - engine_last_running_time > ENGINE_IDLE_TIME)
 
 
 #endif // _ENGINE_H

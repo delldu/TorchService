@@ -6,15 +6,16 @@
 #***
 #************************************************************************************/
 #
+TORCHMODEL_INSTALL_DIR := $(shell grep -w TORCHMODEL_INSTALL_DIR ../Makefile | cut -d '=' -f 2)
 
 LIB_NAME := libtorcheng
 
-INCS	:= $(shell torchtool --cflags) $(shell nimagetool --cflags)
+INCS	:= $(shell ./torchtool --cflags) $(shell nimagetool --cflags)
 
 SOURCE :=  \
 	engine.c
 
-DEFINES :=
+DEFINES := -DTORCHMODEL_INSTALL_DIR="\"$(TORCHMODEL_INSTALL_DIR)\""
 
 CXXFLAGS := -fPIC -Wall -Wextra
 LDFLAGS := -fPIC -O3
@@ -45,6 +46,9 @@ depend:
 %.o : %.c
 	${CXX} ${CXXFLAGS} ${INCS} -c $< -o $@
 
+install:
+	cp torchtool /usr/local/bin
+	cp lddhelper /usr/local/bin
 
 clean:
 	# DO NOT DELETE libdcnv2.so

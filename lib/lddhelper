@@ -1,0 +1,80 @@
+#/************************************************************************************#***
+#***	Copyright Dell 2021, All Rights Reserved.
+#***
+#***	File Author: Dell, 2021年 04月 28日 星期三 16:04:19 CST
+#***
+#************************************************************************************/
+#
+#! /bin/sh
+
+help()
+{
+	echo "Parsing exec with ldd, list or copy linked files to directory."
+	echo
+	echo "    list exec_file"
+	echo "    copy exec_file output_directory"
+	
+	exit 1
+}
+
+list()
+{
+	ldd $1
+
+	echo "-------------------------------------------------------------------------------------------"
+
+	sofiles=`ldd $1 | awk -F "=>" '{print $2}' | awk '{print $1}'`
+
+	for f in $sofiles; 
+	do
+		real_file=`realpath $f`
+
+		if [ "$f" != "$real_file" ] ; then
+			ls -lh $f
+		fi
+		ls -lh $real_file
+	done
+}
+
+copy()
+{
+	[ "$*" == "" -o "$1" == "" -o "$2" == "" ] && usage
+
+	INPUT_FILE=$1
+	OUTPUT_DIR=$2
+
+	if [ ! -x $INPUT_FILE ] ; then
+		echo "$INPUT_FILE must be executable file."
+		exit 1
+	fi
+
+	if [ ! -d $OUTPUT_DIR ] ; then
+		echo "$OUTPUT_DIR must be a directory"
+		exit 1
+	fi
+
+	echo "Parsing $INPUT_FILE, save to $OUTPUT_DIR"
+
+	files=`sofiles $1`
+	for src_filename in $files ; do
+		echo "Parsing $src_filename ... "
+
+		dst_filename=`echo ${OUTPUT_DIR}/$src_filename | tr -s /`
+
+		if [ -f $dst_filename ] ; then
+			continue
+		fi
+
+		dst_dirname=`dirname $dst_filename`
+
+		mkdir -p $dst_dirname
+		cp $src_filename $dst_filename
+	done
+}
+
+if [ "$*" == "" ] ;
+then
+	help
+else
+	eval "$*"
+fi

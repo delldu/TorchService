@@ -12,11 +12,14 @@
 #include <vector>
 #include <memory>
 
-
 // For mkdir
 #include <sys/types.h>
 #include <sys/stat.h> 
 #include "engine.h"
+
+#include <cuda_runtime_api.h>	// locate /usr/local/cuda-10.2/include for cudaDeviceReset
+// #include <c10/cuda/CUDACachingAllocator.h>	// for emptyCache
+static TIME engine_last_running_time = 0;
 
 typedef torch::Tensor TorchTensor;
 
@@ -24,11 +27,17 @@ typedef torch::Tensor TorchTensor;
 #define MAKE_FOURCC(a,b,c,d) (((DWORD)(a) << 24) | ((DWORD)(b) << 16) | ((DWORD)(c) << 8) | ((DWORD)(d) << 0))
 #define ENGINE_MAGIC MAKE_FOURCC('T', 'O', 'R', 'C')
 
-TorchEngine *CreateEngine(const char *model_path, int use_gpu)
+char *FindModel(char *modelname);
+
+
+TorchEngine *CreateEngine(char *model_path, int use_gpu)
 {
 	TorchEngine *t;
 
 	syslog_info("Creating Torch Runtime Engine for model %s ...", model_path);
+
+	CheckPoint("Model load before");
+	system("nvidia-smi");
 
 	t = (TorchEngine *) calloc((size_t) 1, sizeof(TorchEngine));
 	if (!t) {
@@ -36,18 +45,21 @@ TorchEngine *CreateEngine(const char *model_path, int use_gpu)
 		return NULL;
 	}
 	t->magic = ENGINE_MAGIC;
-	t->model_path = model_path;
+	t->model_path = FindModel(model_path);
 	t->use_gpu = use_gpu;
 
 	try {
-		t->module = torch::jit::load(model_path);
+		t->module = torch::jit::load(t->model_path);
 	} catch(const c10::Error & e) {
-		syslog_error("Loading model %s", model_path);
+		syslog_error("Loading model %s", t->model_path);
 		free(t);
 		return NULL;
 	}
 
-	CheckPoint("Module size = %d", sizeof(t->module));
+	CheckPoint("Model load after");
+	system("nvidia-smi");
+
+	// CheckPoint("Module size = %d", sizeof(t->module)); ==> 8
 
 	// to GPU
 	if (use_gpu)
@@ -65,10 +77,13 @@ int ValidEngine(TorchEngine * t)
 
 TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 {
-	int b, c, i, j, n;
+	int b, c, i, n;
 	int dims[4];
 	float *data;
 	TENSOR *output = NULL;
+
+	CheckPoint("Forward before");
+	system("nvidia-smi");
 
 	CHECK_TENSOR(input);
 	auto input_tensor = torch::from_blob(input->data, 
@@ -82,8 +97,6 @@ TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 		output_tensor = output_tensor.to(torch::kCPU);
 	// std::cout << "Output dimensions: " << output_tensor.sizes() << std::endl;
 
-	// torch::Tensor tensor = torch::randn({3, 4, 5});
-	// assert(tensor.sizes() == std::vector<int64_t>{3, 4, 5});
 	auto output_tensor_dims = output_tensor.sizes();
 	n = 4 - output_tensor_dims.size();
 	for (i = 0; i < n; i++)
@@ -99,17 +112,23 @@ TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 	for (b = 0; b < dims[0]; b++) {
 		for (c = 0; c < dims[1]; c++) {
 			data = tensor_start_chan(output, b, c);
-			for (i = 0; i < dims[2]; i++) {
-				for (j = 0; j < dims[3]; j++) {
-					*data++ = *f++;
-				}
-			}
+			for (i = 0; i < dims[2] * dims[3]; i++)
+				*data++ = *f++;
 		}
 	}
 
+	CheckPoint("Forward after");
+	system("nvidia-smi");
+
 	// delete input_tensor/output_tensor ?;
-	// if (engine->use_gpu) {
-	// }
+	if (engine->use_gpu) {
+		// DO NOT DO !!! following, will cause crash !!!
+		// cudaFree(input_tensor.storage().data());
+		// cudaFree(input_tensor.storage().data());
+
+		// The following has no effect
+		//c10::cuda::CUDACachingAllocator::emptyCache();
+	}
 
 	return output;
 }
@@ -119,53 +138,61 @@ void DestroyEngine(TorchEngine * engine)
 	if (!ValidEngine(engine))
 		return;
 
+	if (engine->model_path)
+		free(engine->model_path);
+
 	// delete engine->module ?;
-	// if (engine->use_gpu) {
-	// }
+	if (engine->use_gpu)
+		cudaDeviceReset();
 
 	free(engine);
 }
 
-int TorchService(char *endpoint, char *onnx_file, int use_gpu)
+int TorchService(char *endpoint, char *torch_file, int service_code, int use_gpu, CustomSevice custom_service_function)
 {
-	int socket, reqcode, count, rescode;
+	int socket, msgcode, count;
 	TENSOR *input_tensor, *output_tensor;
-	TorchEngine *engine;
+	TorchEngine *engine = NULL;
 
 	if ((socket = server_open(endpoint)) < 0)
 		return RET_ERROR;
 
-	engine = CreateEngine(onnx_file, use_gpu);
-	CheckEngine(engine);
+	if (! custom_service_function)
+		custom_service_function = service_response;
 
 	count = 0;
 	for (;;) {
-		syslog_info("Service %d times", count);
+		if (EngineIsIdle())
+			StopEngine(engine);
 
-		input_tensor = request_recv(socket, &reqcode);
-
-		if (!tensor_valid(input_tensor)) {
-			syslog_error("Request recv bad tensor ...");
+		if (! socket_readable(socket, 1000))	// timeout 1 s
 			continue;
-		}
-		syslog_info("Request Code = %d", reqcode);
 
-		// Real service ...
-		time_reset();
-		output_tensor = TensorForward(engine, input_tensor);
-		time_spend((char *)"Infer");
+		input_tensor = service_request(socket, &msgcode);
+		if (! tensor_valid(input_tensor))
+			continue;
 
-		if (tensor_valid(output_tensor)) {
-			rescode = reqcode;
-			response_send(socket, output_tensor, rescode);
+		if (msgcode == service_code) {
+			syslog_info("Service %d times", count);
+			StartEngine(engine, onnx_file, use_gpu);
+
+			// Real service ...
+			time_reset();
+			output_tensor = TensorForward(engine, input_tensor);
+			time_spend((char *)"Predict");
+
+			service_response(socket, service_code, output_tensor);
 			tensor_destroy(output_tensor);
+
+			count++;
+		} else {
+			// service_response(socket, servicecode, input_tensor)
+			custom_service_function(socket, OUTOF_SERVICE, NULL);
 		}
 
 		tensor_destroy(input_tensor);
-
-		count++;
 	}
-	DestroyEngine(engine);
+	StopEngine(engine);
 
 	syslog(LOG_INFO, "Service shutdown.\n");
 	server_close(socket);
@@ -179,8 +206,9 @@ TENSOR *OnnxRPC(int socket, TENSOR * input, int reqcode, int *rescode)
 
 	CHECK_TENSOR(input);
 
-	if (request_send(socket, reqcode, input) == RET_OK) {
-		output = response_recv(socket, rescode);
+	*rescode = 0;
+	if (tensor_send(socket, reqcode, input) == RET_OK) {
+		output = tensor_recv(socket, rescode);
 	}
 
 	return output;
@@ -208,4 +236,25 @@ void SaveTensorAsImage(TENSOR *tensor, char *filename)
 		SaveOutputImage(image, filename);
 		image_destroy(image);
 	}
+}
+
+
+char *FindModel(char *modelname)
+{
+	char filename[256];
+
+	snprintf(filename, sizeof(filename), "%s", modelname);
+	if(access(filename, F_OK) == 0) {
+		CheckPoint("Found Model: %s", filename);
+		return strdup(filename);
+	}
+
+	snprintf(filename, sizeof(filename), "%s/%s", TORCHMODEL_INSTALL_DIR, modelname);
+	if(access(filename, F_OK) == 0) {
+		CheckPoint("Found Model: %s", filename);
+		return strdup(filename);
+	}
+
+	syslog_error("Model %s NOT Found !", modelname);
+	return NULL;
 }

@@ -17,13 +17,9 @@
 
 #include "engine.h"
 
-#define VIDEO_RIFE_REQCODE 0x0201
-// #define VIDEO_RIFE_URL "ipc:///tmp/video_rife.ipc"
-#define VIDEO_RIFE_URL "tcp://127.0.0.1:9201"
-
 int server(char *endpoint, int use_gpu)
 {
-	return TorchService(endpoint, (char *)"VideoRIFE.pt", use_gpu);
+	return TorchService(endpoint, (char *)"VideoRIFE.pt", VIDEO_RIFE_SERVICE, use_gpu, NULL);
 }
 
 TENSOR *blend_tensor(char *input_file1, char *input_file2)
@@ -68,15 +64,16 @@ TENSOR *rife_onnxrpc(int socket, TENSOR *send_tensor)
 	CHECK_TENSOR(send_tensor);
 
 	// rife server limited: only accept 8 times tensor !!!
-	nh = (send_tensor->height + 7)/8; nh *= 8;
-	nw = (send_tensor->width + 7)/8; nw *= 8;
+	// nh = (send_tensor->height + 7)/8; nh *= 8;
+	// nw = (send_tensor->width + 7)/8; nw *= 8;
+	space_resize(send_tensor->height, send_tensor->width, 1024, 8, &nh, &nw);
 
 	if (send_tensor->height == nh && send_tensor->width == nw) {
 		// Normal onnx RPC
-		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_RIFE_REQCODE, &rescode);
+		recv_tensor = OnnxRPC(socket, send_tensor, VIDEO_RIFE_SERVICE, &rescode);
 	} else {
 		resize_send = tensor_zoom(send_tensor, nh, nw); CHECK_TENSOR(resize_send);
-		resize_recv = OnnxRPC(socket, resize_send, VIDEO_RIFE_REQCODE, &rescode);
+		resize_recv = OnnxRPC(socket, resize_send, VIDEO_RIFE_SERVICE, &rescode);
 		recv_tensor = tensor_zoom(resize_recv, send_tensor->height, send_tensor->width);
 		tensor_destroy(resize_recv);
 		tensor_destroy(resize_send);

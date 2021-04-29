@@ -9,6 +9,7 @@
 #! /bin/sh
 
 TORCH_INSTALL_DIR=/opt/libtorch
+CUDA_INSTALL_DIR=/usr/local/cuda-10.2
 
 usage()
 {
@@ -21,12 +22,12 @@ usage()
 
 show_cflags()
 {
-	echo "-D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14 -std=gnu++14 -isystem${TORCH_INSTALL_DIR}/include"	
+	echo "-D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14 -std=gnu++14 -isystem${TORCH_INSTALL_DIR}/include -I${CUDA_INSTALL_DIR}/include"	
 }
 
 show_libs()
 {
-	echo "-Wl,--no-as-needed -L${TORCH_INSTALL_DIR}/lib -lc10 -lc10_cuda -ltorch -ltorch_cuda -ltorch_cpu -Wl,-rpath=${TORCH_INSTALL_DIR}/lib"
+	echo "-Wl,--no-as-needed -L${TORCH_INSTALL_DIR}/lib -lc10 -lc10_cuda -ltorch -ltorch_cuda -ltorch_cpu -Wl,-rpath=${TORCH_INSTALL_DIR}/lib -L${CUDA_INSTALL_DIR}/lib64 -lcudart_static -lrt -ldl"
 }
 
 [ "$*" = "" ] && usage
