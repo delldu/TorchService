@@ -142,17 +142,17 @@ void release_reference()
 	reference_face = NULL;	// Just set to null, nothing to do.
 }
 
-void gradient_descent(TorchTensor *x, TorchTensor *grad, float lr)
+void gradient_descent(AtTensor& x, AtTensor& grad, float lr)
 {
 	int i, n;
 	float *x_data, *grad_data;
 
-	auto dims = x->sizes();
+	auto dims = x.sizes();
 	for (n = 1, i = 0; i < (int)dims.size(); i++)
 		n *= dims[i];
 
-	x_data = (float *)x->data_ptr();
-	grad_data = (float *)grad->data_ptr();
+	x_data = (float *)x.data_ptr();
+	grad_data = (float *)grad.data_ptr();
 	for (i = 0; i < n; i++)
 		x_data[i] -= lr * grad_data[i];
 }
@@ -160,23 +160,100 @@ void gradient_descent(TorchTensor *x, TorchTensor *grad, float lr)
 
 TENSOR *do_search(TENSOR *input_tensor)
 {
-	TENSOR *wcode_tensor, *output_tensor;	
+	TENSOR *wcode_tensor, *image_tensor;	
 	CHECK_TENSOR(input_tensor);
 
 	wcode_tensor = random_wcode();
 	CHECK_TENSOR(wcode_tensor);
 
-	output_tensor = TensorForward(decoder_engine, wcode_tensor);
+	image_tensor = TensorForward(decoder_engine, wcode_tensor);
 	tensor_destroy(wcode_tensor);
 
-	return output_tensor;
+	return image_tensor;
 }
+
+TENSOR *do_optimizing(int epochs, float lr)
+{
+	int i, index;
+	float *f;
+	AtTensor loss, grad;
+	TorchTensor image_tensor, reference_tensor;
+
+	// One of the applications of higher-order gradients is calculating gradient penalty.
+	// Let's see an example of it using ``torch::autograd::grad``:
+
+	TENSOR *mean = mean_wcode();
+	CHECK_TENSOR(mean);
+	CheckEngine(decoder_engine);
+
+	// Create reference_tensor for compare
+	reference_tensor = torch::zeros({1, 3, 256, 256});
+	f = (float *)reference_tensor.data_ptr();
+	for (i = 0; i < 1 * 3 * 256 * 256; i++)
+		f[i] = reference_face->data[i];
+
+
+
+	AtTensor input_tensor = torch::from_blob(mean->data, 
+			{mean->batch, mean->chan, mean->height, mean->width}).requires_grad_(true);
+
+	index = 0;
+	while(index < epochs) {
+		image_tensor = decoder_engine->module.forward({input_tensor}).toTensor();
+
+		// reshape(batch, channel, height // factor, factor, width // factor, factor)
+		image_tensor = image_tensor.reshape({1, 3, 256, 4, 256, 4});
+		image_tensor = image_tensor.mean({3, 5});
+
+		loss = torch::nn::MSELoss()(image_tensor, reference_tensor);
+
+		if (loss.item<float>() < 1e-3f)
+			break;
+
+		loss.backward();
+
+		grad = input_tensor.grad();
+		gradient_descent(input_tensor, grad, lr);
+
+		index++;
+	}
+
+
+
+
+	auto model = torch::nn::Linear(4, 3);
+
+	auto input = torch::randn({3, 4}).requires_grad_(true);
+	auto output = model(input);
+
+	// Calculate loss
+	auto target = torch::randn({3, 3});
+
+	// Use norm of gradients as penalty
+	auto grad_output = torch::ones_like(output);
+	auto gradient = torch::autograd::grad({output}, {input}, /*grad_outputs=*/{grad_output}, /*create_graph=*/true)[0];
+	auto gradient_penalty = torch::pow((gradient.norm(2, /*dim=*/1) - 1), 2).mean();
+
+	// Add gradient penalty to loss
+	// auto combined_loss = loss + gradient_penalty;
+	// combined_loss.backward();
+
+	std::cout << input.grad() << std::endl;
+
+	// -0.0260  0.1660  0.3094  0.0113
+	//  0.1350  0.2266  0.1991 -0.0556
+	//  0.1171  0.1380 -0.0355 -0.0320
+
+	return NULL;
+}
+
+
 
 
 int FaceGanService(char *endpoint, int use_gpu, CustomSevice custom_service_function)
 {
 	int socket, msgcode, count;
-	TENSOR *input_tensor, *output_tensor;
+	TENSOR *input_tensor, *image_tensor;
 
 
 	if ((socket = server_open(endpoint)) < 0)
@@ -210,11 +287,11 @@ int FaceGanService(char *endpoint, int use_gpu, CustomSevice custom_service_func
 			// Real service ...
 			time_reset();
 			save_reference(input_tensor);
-			output_tensor = do_search(input_tensor);
+			image_tensor = do_search(input_tensor);
 			time_spend((char *)"Searching");
 
-			service_response(socket, IMAGE_FACEGAN_SERVICE, output_tensor);
-			tensor_destroy(output_tensor);
+			service_response(socket, IMAGE_FACEGAN_SERVICE, image_tensor);
+			tensor_destroy(image_tensor);
 
 			count++;
 		} else {
@@ -308,40 +385,6 @@ void help(char *cmd)
 }
 
 
-
-void compute_higher_order_gradients_example()
-{
-	std::cout << "====== Running \"Computing higher-order gradients in C++\" ======" << std::endl;
-
-	// One of the applications of higher-order gradients is calculating gradient penalty.
-	// Let's see an example of it using ``torch::autograd::grad``:
-
-	auto model = torch::nn::Linear(4, 3);
-
-	auto input = torch::randn({3, 4}).requires_grad_(true);
-	auto output = model(input);
-
-	// Calculate loss
-	auto target = torch::randn({3, 3});
-	auto loss = torch::nn::MSELoss()(output, target);
-
-	// Use norm of gradients as penalty
-	auto grad_output = torch::ones_like(output);
-	auto gradient = torch::autograd::grad({output}, {input}, /*grad_outputs=*/{grad_output}, /*create_graph=*/true)[0];
-	auto gradient_penalty = torch::pow((gradient.norm(2, /*dim=*/1) - 1), 2).mean();
-
-	// Add gradient penalty to loss
-	auto combined_loss = loss + gradient_penalty;
-	combined_loss.backward();
-
-	std::cout << input.grad() << std::endl;
-
-	// -0.0260  0.1660  0.3094  0.0113
-	//  0.1350  0.2266  0.1991 -0.0556
-	//  0.1171  0.1380 -0.0355 -0.0320
-}
-
-
 int main(int argc, char **argv)
 {
 	int i, optc;
@@ -358,9 +401,6 @@ int main(int argc, char **argv)
 		{"server", 1, 0, 's'},
 		{0, 0, 0, 0}
 	};
-
-	compute_higher_order_gradients_example();
-
 
 	if (argc <= 1)
 		help(argv[0]);
