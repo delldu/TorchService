@@ -18,6 +18,9 @@
 #include "engine.h"
 
 #include <random>	// Support since C++11 
+#include <torch/torch.h>
+// #include <iostream>
+
 
 #define W_SPACE_DIM 512
 
@@ -28,22 +31,32 @@ TorchEngine *loss_engine = NULL;
 
 TENSOR *reference_face = NULL;
 
-TENSOR *random_zcode()
+// Fill normal distribution to zcode
+int normal_zdata(TENSOR *zcode_tensor)
 {
 	int i;
-	TENSOR *zcode_tensor;
+
     std::random_device rd{};
     std::mt19937 gen{rd()};
     std::normal_distribution<float> dis{0.0, 1.0};	// mean = 0.0, std = 1.0
 
 	srand(time(NULL));
-
-	// Create zcode tensor
-	zcode_tensor = tensor_create(1, 1, 1, W_SPACE_DIM);
-	CHECK_TENSOR(zcode_tensor);
+	check_tensor(zcode_tensor);
 
 	for (i = 0; i < W_SPACE_DIM; i++)
 		zcode_tensor->data[i] = dis(gen);
+
+	return RET_OK;
+}
+
+TENSOR *random_zcode()
+{
+	TENSOR *zcode_tensor;
+
+	zcode_tensor = tensor_create(1, 1, 1, W_SPACE_DIM);
+	CHECK_TENSOR(zcode_tensor);
+	
+	normal_zdata(zcode_tensor);
 
 	return zcode_tensor;
 }
@@ -67,13 +80,58 @@ TENSOR *random_wcode()
 	return wcode_tensor;
 }
 
+/*****************************************************
+*
+* Start optimizing from mean wcode
+*
+******************************************************/
+TENSOR *mean_wcode()
+{
+	int i, j, n;
+	TENSOR *zcode_tensor, *wcode_tensor, *average_tensor;
+
+	CheckEngine(trans_engine);
+
+	average_tensor = tensor_create(1, 18, 1, W_SPACE_DIM);
+	CHECK_TENSOR(average_tensor);
+	memset(average_tensor->data, 0, 18 * W_SPACE_DIM * sizeof(float));
+
+	// Create zcode tensor
+	zcode_tensor = tensor_create(1, 1, 1, W_SPACE_DIM);
+	CHECK_TENSOR(zcode_tensor);
+
+	n = 4096;
+	for (i = 0; i < n; i++) {
+		normal_zdata(zcode_tensor);
+
+		wcode_tensor = TensorForward(trans_engine, zcode_tensor);
+		CHECK_TENSOR(wcode_tensor);
+
+		// Save wcode_tensor ...
+		for (j = 0; j < 18 * W_SPACE_DIM; j++)
+			average_tensor->data[i] += wcode_tensor->data[i];
+
+		tensor_destroy(wcode_tensor);
+	}
+
+	tensor_destroy(zcode_tensor);
+
+	for (j = 0; j < 18 * W_SPACE_DIM; j++)
+		average_tensor->data[i] /= n;
+
+	return average_tensor;
+}
+
 int save_reference(TENSOR *input_tensor)
 {
+	int i, n;
 	check_tensor(input_tensor);
 
-	// Save reference  ...
-	if (reference_face)
-		tensor_destroy(reference_face);
+	// Normal for perception loss
+	n = input_tensor->batch * input_tensor->chan * input_tensor->height * input_tensor->width;
+	for (i = 0; i < n; i++)
+		input_tensor->data[i] -= 0.5;
+
 	reference_face = input_tensor;
 
 	return RET_OK;
@@ -81,8 +139,24 @@ int save_reference(TENSOR *input_tensor)
 
 void release_reference()
 {
-	reference_face = NULL;	// Just set to null.
+	reference_face = NULL;	// Just set to null, nothing to do.
 }
+
+void gradient_descent(TorchTensor *x, TorchTensor *grad, float lr)
+{
+	int i, n;
+	float *x_data, *grad_data;
+
+	auto dims = x->sizes();
+	for (n = 1, i = 0; i < (int)dims.size(); i++)
+		n *= dims[i];
+
+	x_data = (float *)x->data_ptr();
+	grad_data = (float *)grad->data_ptr();
+	for (i = 0; i < n; i++)
+		x_data[i] -= lr * grad_data[i];
+}
+
 
 TENSOR *do_search(TENSOR *input_tensor)
 {
@@ -233,6 +307,41 @@ void help(char *cmd)
 	exit(1);
 }
 
+
+
+void compute_higher_order_gradients_example()
+{
+	std::cout << "====== Running \"Computing higher-order gradients in C++\" ======" << std::endl;
+
+	// One of the applications of higher-order gradients is calculating gradient penalty.
+	// Let's see an example of it using ``torch::autograd::grad``:
+
+	auto model = torch::nn::Linear(4, 3);
+
+	auto input = torch::randn({3, 4}).requires_grad_(true);
+	auto output = model(input);
+
+	// Calculate loss
+	auto target = torch::randn({3, 3});
+	auto loss = torch::nn::MSELoss()(output, target);
+
+	// Use norm of gradients as penalty
+	auto grad_output = torch::ones_like(output);
+	auto gradient = torch::autograd::grad({output}, {input}, /*grad_outputs=*/{grad_output}, /*create_graph=*/true)[0];
+	auto gradient_penalty = torch::pow((gradient.norm(2, /*dim=*/1) - 1), 2).mean();
+
+	// Add gradient penalty to loss
+	auto combined_loss = loss + gradient_penalty;
+	combined_loss.backward();
+
+	std::cout << input.grad() << std::endl;
+
+	// -0.0260  0.1660  0.3094  0.0113
+	//  0.1350  0.2266  0.1991 -0.0556
+	//  0.1171  0.1380 -0.0355 -0.0320
+}
+
+
 int main(int argc, char **argv)
 {
 	int i, optc;
@@ -249,6 +358,9 @@ int main(int argc, char **argv)
 		{"server", 1, 0, 's'},
 		{0, 0, 0, 0}
 	};
+
+	compute_higher_order_gradients_example();
+
 
 	if (argc <= 1)
 		help(argv[0]);
