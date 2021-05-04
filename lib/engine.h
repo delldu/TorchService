@@ -19,7 +19,12 @@
 
 // One-stop header.
 #include <torch/script.h>
+
+typedef at::Tensor AtTensor;
+typedef torch::Tensor TorchTensor;
 typedef torch::jit::script::Module TorchModule;
+
+static TIME engine_last_running_time = 0;
 
 
 // Torch Runtime Engine
@@ -56,7 +61,7 @@ void SaveTensorAsImage(TENSOR *tensor, char *filename);
 
 #define ENGINE_IDLE_TIME (120*1000)	// 120 seconds
 
-#define StartEngine(engine, onnx_file, use_gpu) \
+#define StartEngine(engine, torch_file, use_gpu) \
 do { \
 	if (engine == NULL) \
 		engine = CreateEngine(torch_file, use_gpu); \
@@ -71,7 +76,6 @@ do { \
 	engine = NULL; \
 } while(0)
 
-#define InitEngineRunningTime() do { engine_last_running_time = 0; } while(0)
 #define EngineIsIdle() (time_now() - engine_last_running_time > ENGINE_IDLE_TIME)
 
 

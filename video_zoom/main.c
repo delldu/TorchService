@@ -47,10 +47,7 @@ void test_dcn_v2_forward()
 int zoom_server(char *endpoint, int use_gpu)
 {
 	test_dcn_v2_forward();	// Just loading dcnv2_forward from shared lib
-	if (use_gpu)
-		return TorchService(endpoint, (char *)"VideoZoomGPU.pt", VIDEO_ZOOM_SERVICE, use_gpu, NULL);
-	// CPU Model
-	return TorchService(endpoint, (char *)"VideoZoomCPU.pt", VIDEO_ZOOM_SERVICE, use_gpu, NULL);
+	return TorchService(endpoint, (char *)"VideoZoom.pt", VIDEO_ZOOM_SERVICE, use_gpu, NULL);
 }
 
 TENSOR *blend_tensor(char *input_file1, char *input_file2)
@@ -95,8 +92,9 @@ TENSOR *zoom_onnxrpc(int socket, TENSOR *send_tensor)
 	CHECK_TENSOR(send_tensor);
 
 	// zoom zoom_server limited: only accept 8 times tensor !!!
-	nh = (send_tensor->height + 7)/8; nh *= 8;
-	nw = (send_tensor->width + 7)/8; nw *= 8;
+	// nh = (send_tensor->height + 7)/8; nh *= 8;
+	// nw = (send_tensor->width + 7)/8; nw *= 8;
+	space_resize(send_tensor->height, send_tensor->width, 1024, 8, &nh, &nw);
 
 	if (send_tensor->height == nh && send_tensor->width == nw) {
 		// Normal onnx RPC

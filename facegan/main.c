@@ -72,9 +72,13 @@ TENSOR *best_wcode(int epochs, float lr)
 	* Start optimizing from mean wcode
 	*
 	******************************************************/
-	auto zcode = torch::randn({4096, W_SPACE_DIM});
+	auto zcode = torch::randn({8192, W_SPACE_DIM});
 	zcode = trans_engine->module.forward({zcode}).toTensor();
 	latent_in = zcode.detach().mean(0, 1);
+
+	if (decoder_engine->use_gpu)
+		latent_in = latent_in.to(torch::kCUDA);
+
 	latent_in.requires_grad_(true);
 
 	torch::optim::Adam optimizer({latent_in}, lr=lr);
@@ -87,9 +91,9 @@ TENSOR *best_wcode(int epochs, float lr)
 		progress = 1.0 * index/epochs;
 
 		if (index == 0)
-			syslog_info("Searching %6.2f%% ... ", progress);
+			syslog_info("Searching %6.2f%% ... ", progress * 100.0);
 		else
-			syslog_info("Searching %6.2f%%, best loss: %.4f ...", progress, best_loss);
+			syslog_info("Searching %6.2f%%, best loss: %.4f ...", progress * 100.0, best_loss);
 
 		noise_strength = pow(0.05 * MAX(0, 1 - progress/0.75), 2);
 		input_tensor = latent_in + torch::randn_like(latent_in) * noise_strength;
@@ -131,7 +135,7 @@ TENSOR *do_search(TENSOR *input_tensor)
 
 	reference_face = input_tensor;
 
-	wcode_tensor = best_wcode(20, 0.1); // random_wcode();
+	wcode_tensor = best_wcode(15, 0.1); // random_wcode();
 	CHECK_TENSOR(wcode_tensor);
 
 	image_tensor = TensorForward(decoder_engine, wcode_tensor);

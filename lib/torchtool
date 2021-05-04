@@ -22,7 +22,10 @@ usage()
 
 show_cflags()
 {
-	echo "-D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14 -std=gnu++14 -isystem${TORCH_INSTALL_DIR}/include -I${CUDA_INSTALL_DIR}/include"	
+	echo -n "-D_GLIBCXX_USE_CXX11_ABI=1 -std=c++14 -std=gnu++14 "
+	echo -n "-isystem${TORCH_INSTALL_DIR}/include "
+	echo -n "-isystem${TORCH_INSTALL_DIR}/include/torch/csrc/api/include "
+	echo "-I${CUDA_INSTALL_DIR}/include"
 }
 
 show_libs()

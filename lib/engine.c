@@ -19,9 +19,6 @@
 
 #include <cuda_runtime_api.h>	// locate /usr/local/cuda-10.2/include for cudaDeviceReset
 // #include <c10/cuda/CUDACachingAllocator.h>	// for emptyCache
-static TIME engine_last_running_time = 0;
-
-typedef torch::Tensor TorchTensor;
 
 // Torch Runtime Engine
 #define MAKE_FOURCC(a,b,c,d) (((DWORD)(a) << 24) | ((DWORD)(b) << 16) | ((DWORD)(c) << 8) | ((DWORD)(d) << 0))
@@ -36,8 +33,8 @@ TorchEngine *CreateEngine(char *model_path, int use_gpu)
 
 	syslog_info("Creating Torch Runtime Engine for model %s ...", model_path);
 
-	CheckPoint("Model load before");
-	system("nvidia-smi");
+	// CheckPoint("Model load before");
+	// system("nvidia-smi");
 
 	t = (TorchEngine *) calloc((size_t) 1, sizeof(TorchEngine));
 	if (!t) {
@@ -56,8 +53,8 @@ TorchEngine *CreateEngine(char *model_path, int use_gpu)
 		return NULL;
 	}
 
-	CheckPoint("Model load after");
-	system("nvidia-smi");
+	// CheckPoint("Model load after");
+	// system("nvidia-smi");
 
 	// CheckPoint("Module size = %d", sizeof(t->module)); ==> 8
 
@@ -77,13 +74,12 @@ int ValidEngine(TorchEngine * t)
 
 TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 {
-	int b, c, i, n;
+	int i, n;
 	int dims[4];
-	float *data;
 	TENSOR *output = NULL;
 
-	CheckPoint("Forward before");
-	system("nvidia-smi");
+	// CheckPoint("Forward before");
+	// system("nvidia-smi");
 
 	CHECK_TENSOR(input);
 	auto input_tensor = torch::from_blob(input->data, 
@@ -109,16 +105,7 @@ TENSOR *TensorForward(TorchEngine * engine, TENSOR * input)
 
 	// auto f_a = output_tensor.accessor<float, 4>();
 	float *f = (float *)output_tensor.data_ptr();
-	for (b = 0; b < dims[0]; b++) {
-		for (c = 0; c < dims[1]; c++) {
-			data = tensor_start_chan(output, b, c);
-			for (i = 0; i < dims[2] * dims[3]; i++)
-				*data++ = *f++;
-		}
-	}
-
-	CheckPoint("Forward after");
-	system("nvidia-smi");
+	memcpy(output->data, f, dims[0] * dims[1] * dims[2] * dims[3] * sizeof(float));
 
 	// delete input_tensor/output_tensor ?;
 	if (engine->use_gpu) {
@@ -174,7 +161,7 @@ int TorchService(char *endpoint, char *torch_file, int service_code, int use_gpu
 
 		if (msgcode == service_code) {
 			syslog_info("Service %d times", count);
-			StartEngine(engine, onnx_file, use_gpu);
+			StartEngine(engine, torch_file, use_gpu);
 
 			// Real service ...
 			time_reset();
