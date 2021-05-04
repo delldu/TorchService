@@ -19,11 +19,9 @@
 
 #include <random>	// Support since C++11 
 #include <torch/torch.h>
-// #include <iostream>
-
+#include <iostream>
 
 #define W_SPACE_DIM 512
-
 
 TorchEngine *trans_engine = NULL;	
 TorchEngine *decoder_engine = NULL;
@@ -92,31 +90,30 @@ TENSOR *mean_wcode()
 
 	CheckEngine(trans_engine);
 
-	average_tensor = tensor_create(1, 18, 1, W_SPACE_DIM);
+	average_tensor = tensor_create(1, 1, 1, W_SPACE_DIM);
 	CHECK_TENSOR(average_tensor);
-	memset(average_tensor->data, 0, 18 * W_SPACE_DIM * sizeof(float));
+	memset(average_tensor->data, 0, 1 * W_SPACE_DIM * sizeof(float));
 
 	// Create zcode tensor
 	zcode_tensor = tensor_create(1, 1, 1, W_SPACE_DIM);
 	CHECK_TENSOR(zcode_tensor);
 
-	n = 4096;
+	n = 1; // xxxx8888
 	for (i = 0; i < n; i++) {
 		normal_zdata(zcode_tensor);
 
 		wcode_tensor = TensorForward(trans_engine, zcode_tensor);
 		CHECK_TENSOR(wcode_tensor);
-
 		// Save wcode_tensor ...
-		for (j = 0; j < 18 * W_SPACE_DIM; j++)
-			average_tensor->data[i] += wcode_tensor->data[i];
+		for (j = 0; j < W_SPACE_DIM; j++)
+			average_tensor->data[j] += wcode_tensor->data[j];
 
 		tensor_destroy(wcode_tensor);
 	}
 
 	tensor_destroy(zcode_tensor);
 
-	for (j = 0; j < 18 * W_SPACE_DIM; j++)
+	for (j = 0; j < W_SPACE_DIM; j++)
 		average_tensor->data[i] /= n;
 
 	return average_tensor;
@@ -124,13 +121,13 @@ TENSOR *mean_wcode()
 
 int save_reference(TENSOR *input_tensor)
 {
-	int i, n;
+	// int i, n;
 	check_tensor(input_tensor);
 
 	// Normal for perception loss
-	n = input_tensor->batch * input_tensor->chan * input_tensor->height * input_tensor->width;
-	for (i = 0; i < n; i++)
-		input_tensor->data[i] -= 0.5;
+	// n = input_tensor->batch * input_tensor->chan * input_tensor->height * input_tensor->width;
+	// for (i = 0; i < n; i++)
+	// 	input_tensor->data[i] -= 0.5;
 
 	reference_face = input_tensor;
 
@@ -157,13 +154,118 @@ void gradient_descent(AtTensor& x, AtTensor& grad, float lr)
 		x_data[i] -= lr * grad_data[i];
 }
 
+// def get_lr(t, initial_lr, rampdown=0.25, rampup=0.05):
+//     lr_ramp = min(1, (1 - t) / rampdown)
+//     lr_ramp = 0.5 - 0.5 * math.cos(lr_ramp * math.pi)
+//     lr_ramp = lr_ramp * min(1, t / rampup)
+//     return initial_lr * lr_ramp
+
+float learning_rate(float t, float init_lr)
+{
+	float rampdown = 0.25;
+	float rampup = 0.05;
+	float lr_ramp = MIN(1.0, (1.0 - t)/rampdown);
+	lr_ramp = 0.5 - 0.5 * cosf(lr_ramp * 3.1415926);
+	lr_ramp = lr_ramp * MIN(1.0, t/rampup);
+
+	return init_lr * lr_ramp;
+}
+
+
+TENSOR *best_wcode(int epochs, float lr)
+{
+	int i, index;
+	TENSOR *best_tensor;
+	float *fdata, best_loss, noise_strength, progress;
+	TorchTensor latent_in, input_tensor, loss;
+	TorchTensor image_tensor, reference_tensor;
+	// AtTensor image_tensor, reference_tensor;
+
+	CheckEngine(decoder_engine);
+	CheckEngine(trans_engine);
+	CheckEngine(loss_engine);
+
+	// mean = mean_wcode(); CHECK_TENSOR(mean);
+
+	// Create reference_tensor for compare
+	reference_tensor = torch::zeros({1, 3, 256, 256});
+	fdata = (float *)reference_tensor.data_ptr();
+	for (i = 0; i < 1 * 3 * 256 * 256; i++)
+		fdata[i] = reference_face->data[i];
+
+
+	auto zcode = torch::randn({4096, W_SPACE_DIM});
+	zcode = trans_engine->module.forward({zcode}).toTensor();
+	latent_in = zcode.detach().mean(0, 1);
+	latent_in.requires_grad_(true);
+
+	CheckPoint("latent_in.is_leaf = %d", latent_in.is_leaf());
+
+	torch::optim::Adam optimizer({latent_in}, lr=lr);
+	// torch::optim::Adam optimizer({latent_in}, torch::optim::AdamOptions(lr).betas(std::make_tuple (0.5, 0.5)));
+
+	index = 0;
+	best_tensor = tensor_create(1, 1, 1, W_SPACE_DIM); CHECK_TENSOR(best_tensor);
+	best_loss = 1000000000.0;
+
+	while(index < epochs) {
+		syslog_info("Searching epoch: %d/%d, best loss: %.4f", index + 1, epochs, best_loss);
+
+		progress = 1.0 * index/epochs;
+		noise_strength = pow(0.05 * MAX(0, 1 - progress/0.75), 2);
+
+		input_tensor = latent_in + torch::randn_like(latent_in) * noise_strength;
+
+		// Forward
+		image_tensor = decoder_engine->module.forward({input_tensor}).toTensor();
+
+		// reshape(batch, channel, height // factor, factor, width // factor, factor)
+		image_tensor = image_tensor.reshape({1, 3, 256, 4, 256, 4});
+		image_tensor = image_tensor.mean({3, 5});
+
+		std::vector<torch::jit::IValue> loss_inputs;
+    	loss_inputs.push_back(image_tensor);
+    	loss_inputs.push_back(reference_tensor);
+
+		loss = loss_engine->module.forward(loss_inputs).toTensor();
+		// + 0.01 * torch::nn::MSELoss()(image_tensor, reference_tensor);
+
+        optimizer.zero_grad();
+        loss.backward();
+        optimizer.step();
+
+		// Save best
+		if (best_loss > loss.item<float>()) {
+			best_loss = loss.item<float>();
+			fdata = (float *)input_tensor.data_ptr();
+			for (i = 0; i < W_SPACE_DIM; i++)
+				best_tensor->data[i] = fdata[i];
+		}
+
+		if (best_loss < 1e-3f)
+			break;
+
+		// loss.backward();
+		// grad = input_tensor.grad();
+		// gradient_descent(input_tensor, grad, lr);
+		// printf("Gradient: ");
+		// fdata = (float *)grad.data_ptr();
+		// for (i = 0; i < W_SPACE_DIM; i++)
+		// 	printf("%.6f, ", fdata[i]);
+		// printf("\n");
+
+		index++;
+	}
+
+	return best_tensor;
+}
 
 TENSOR *do_search(TENSOR *input_tensor)
 {
 	TENSOR *wcode_tensor, *image_tensor;	
 	CHECK_TENSOR(input_tensor);
 
-	wcode_tensor = random_wcode();
+	wcode_tensor = best_wcode(10, 0.1); // random_wcode();
 	CHECK_TENSOR(wcode_tensor);
 
 	image_tensor = TensorForward(decoder_engine, wcode_tensor);
@@ -172,89 +274,10 @@ TENSOR *do_search(TENSOR *input_tensor)
 	return image_tensor;
 }
 
-TENSOR *do_optimizing(int epochs, float lr)
-{
-	int i, index;
-	float *f;
-	AtTensor loss, grad;
-	TorchTensor image_tensor, reference_tensor;
-
-	// One of the applications of higher-order gradients is calculating gradient penalty.
-	// Let's see an example of it using ``torch::autograd::grad``:
-
-	TENSOR *mean = mean_wcode();
-	CHECK_TENSOR(mean);
-	CheckEngine(decoder_engine);
-
-	// Create reference_tensor for compare
-	reference_tensor = torch::zeros({1, 3, 256, 256});
-	f = (float *)reference_tensor.data_ptr();
-	for (i = 0; i < 1 * 3 * 256 * 256; i++)
-		f[i] = reference_face->data[i];
-
-
-
-	AtTensor input_tensor = torch::from_blob(mean->data, 
-			{mean->batch, mean->chan, mean->height, mean->width}).requires_grad_(true);
-
-	index = 0;
-	while(index < epochs) {
-		image_tensor = decoder_engine->module.forward({input_tensor}).toTensor();
-
-		// reshape(batch, channel, height // factor, factor, width // factor, factor)
-		image_tensor = image_tensor.reshape({1, 3, 256, 4, 256, 4});
-		image_tensor = image_tensor.mean({3, 5});
-
-		loss = torch::nn::MSELoss()(image_tensor, reference_tensor);
-
-		if (loss.item<float>() < 1e-3f)
-			break;
-
-		loss.backward();
-
-		grad = input_tensor.grad();
-		gradient_descent(input_tensor, grad, lr);
-
-		index++;
-	}
-
-
-
-
-	auto model = torch::nn::Linear(4, 3);
-
-	auto input = torch::randn({3, 4}).requires_grad_(true);
-	auto output = model(input);
-
-	// Calculate loss
-	auto target = torch::randn({3, 3});
-
-	// Use norm of gradients as penalty
-	auto grad_output = torch::ones_like(output);
-	auto gradient = torch::autograd::grad({output}, {input}, /*grad_outputs=*/{grad_output}, /*create_graph=*/true)[0];
-	auto gradient_penalty = torch::pow((gradient.norm(2, /*dim=*/1) - 1), 2).mean();
-
-	// Add gradient penalty to loss
-	// auto combined_loss = loss + gradient_penalty;
-	// combined_loss.backward();
-
-	std::cout << input.grad() << std::endl;
-
-	// -0.0260  0.1660  0.3094  0.0113
-	//  0.1350  0.2266  0.1991 -0.0556
-	//  0.1171  0.1380 -0.0355 -0.0320
-
-	return NULL;
-}
-
-
-
-
 int FaceGanService(char *endpoint, int use_gpu, CustomSevice custom_service_function)
 {
 	int socket, msgcode, count;
 	TENSOR *input_tensor, *image_tensor;
-
 
 	if ((socket = server_open(endpoint)) < 0)
 		return RET_ERROR;
@@ -267,7 +290,7 @@ int FaceGanService(char *endpoint, int use_gpu, CustomSevice custom_service_func
 		if (EngineIsIdle()) {
 			StopEngine(trans_engine);
 			StopEngine(decoder_engine);
-			// StopEngine(loss_engine);
+			StopEngine(loss_engine);
 		}
 
 		if (! socket_readable(socket, 1000))	// timeout 1 s
@@ -282,7 +305,7 @@ int FaceGanService(char *endpoint, int use_gpu, CustomSevice custom_service_func
 
 			StartEngine(trans_engine, (char *)"FaceganTransformer.pt", use_gpu);
 			StartEngine(decoder_engine, (char *)"FaceganDecoder.pt", use_gpu);
-			// StartEngine(loss_engine, (char *)"FaceganLoss.pt", use_gpu);
+			StartEngine(loss_engine, (char *)"FaceganPercept.pt", use_gpu);
 
 			// Real service ...
 			time_reset();
@@ -305,7 +328,7 @@ int FaceGanService(char *endpoint, int use_gpu, CustomSevice custom_service_func
 	}
 	StopEngine(trans_engine);
 	StopEngine(decoder_engine);
-	// StopEngine(loss_engine);
+	StopEngine(loss_engine);
 
 	syslog(LOG_INFO, "Service shutdown.\n");
 	server_close(socket);
@@ -420,6 +443,14 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
+
+	// auto latent = torch::randn({4096, 512});
+	// std::cout << "latent --- " << latent.sizes() << std::endl;
+	// std::cout << "mean --- " << latent.mean(0, 1 /*keep dimmension */).sizes() << std::endl;
+	// std::cout << "std --- " << latent.std(0).sizes() << std::endl;
+
+	// latent.requires_grad_(true); 
+
 
 	if (running_server)
 		return server(endpoint, use_gpu);
